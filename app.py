@@ -4,67 +4,35 @@ import joblib
 from datetime import datetime
 
 # Load pre-trained models
-regressor = joblib.load('models/regressor.pkl')
-classifier = joblib.load('models/classifier.pkl')
+duration_model = joblib.load('models/duration_model.pkl')
+recurrence_model = joblib.load('models/recurrence_model.pkl')
 
-# Feature engineering function
-def preprocess_input(input_df):
-    # Date calculations
-    input_df['NCR Closure Duration'] = (input_df['Closed Date'] - input_df['Date Issued']).dt.days
-    input_df['Reply_Delay'] = (input_df['Actual Reply Date'] - input_df['Expected Reply Date']).dt.days
-    
-    # Categorical encoding (match training data columns)
-    categorical_cols = ['Category', 'Status', 'Nature of NCR', 'Package', 'Contractor']
-    input_df = pd.get_dummies(input_df, columns=categorical_cols)
-    
-    # Add missing columns present in training
-    expected_columns = [
-        'Category_Quality', 'Status_Closed', 'Nature of NCR_Workmanship', 
-        'Package_PKG2A', 'Contractor_APSB'
-    ]  # Add all your actual columns here
-    for col in expected_columns:
-        if col not in input_df.columns:
-            input_df[col] = 0
-            
-    return input_df
+# Input widgets for user data
+st.title("NCR Closure Prediction")
+category = st.selectbox("Category", ["Quality", "Safety", "Env", "Risk", "P&D"])
+nature_of_ncr = st.text_input("Nature of NCR (e.g., Workmanship)")
+package = st.selectbox("Package", ["PKG2A", "PKG3", "PKG4", "PKG5", "PKG6"])
+contractor = st.selectbox("Contractor", ["APSB", "SUNCON", "IJMC"])
+date_issued = st.date_input("Date Issued")
 
-# Streamlit UI
-st.title('NCR Prediction System')
+if st.button("Predict"):
+    # Preprocess inputs (mimic training data preprocessing)
+    input_data = pd.DataFrame({
+        'Category': [category],
+        'Nature of NCR': [nature_of_ncr],
+        'Package': [package],
+        'Contractor': [contractor],
+        'Date Issued': [date_issued]
+    })
 
-# Input form
-with st.form('ncr_form'):
-    category = st.selectbox('Category', ['Quality', 'Safety', 'Env', 'Risk', 'P&D'])
-    nature = st.text_input('Nature of NCR')
-    package = st.selectbox('Package', ['PKG2A', 'PKG3', 'PKG4', 'PKG5', 'PKG6'])
-    
-    date_issued = st.date_input('Date Issued')
-    expected_reply = st.date_input('Expected Reply Date')
-    actual_reply = st.date_input('Actual Reply Date')
-    
-    submit = st.form_submit_button('Predict')
+    # One-hot encode categorical variables (ensure alignment with training)
+    input_data = pd.get_dummies(input_data).reindex(columns=training_columns, fill_value=0)
 
-if submit:
-    # Create input DataFrame
-    input_data = pd.DataFrame([{
-        'Category': category,
-        'Nature of NCR': nature,
-        'Package': package,
-        'Date Issued': date_issued,
-        'Expected Reply Date': expected_reply,
-        'Actual Reply Date': actual_reply
-    }])
-    
-    # Preprocess input
-    processed_data = preprocess_input(input_data)
-    
     # Predict
-    duration_pred = regressor.predict(processed_data)
-    recurrence_pred = classifier.predict(processed_data)
-    
+    duration_pred = duration_model.predict(input_data)[0]
+    recurrence_prob = recurrence_model.predict_proba(input_data)[0][1]
+
     # Display results
-    st.subheader('Predictions')
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Predicted Closure Days", f"{duration_pred[0]:.1f}")
-    with col2:
-        st.metric("Recurrence Risk", "High" if recurrence_pred[0] == 1 else "Low")
+    st.subheader("Predictions")
+    st.write(f"Predicted Closure Duration: **{duration_pred:.1f} days**")
+    st.write(f"Recurrence Probability: **{recurrence_prob*100:.2f}%**")
