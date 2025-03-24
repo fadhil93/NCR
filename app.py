@@ -1,87 +1,70 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import pickle
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-import os
+import joblib
+from datetime import datetime
 
-# Set page config
-st.set_page_config(page_title="NCR Prediction System", layout="wide")
+# Load pre-trained models
+regressor = joblib.load('models/regressor.pkl')
+classifier = joblib.load('models/classifier.pkl')
 
-# Title
-st.title("🏗️ NCR Prediction System")
-st.markdown("Predicting Timely Closure and Effectiveness of Non-Conformance Reports in Construction Projects")
-
-# Sidebar
-st.sidebar.header("About")
-st.sidebar.info("This application predicts NCR closure duration and recurrence probability.")
-
-# Main content
-tab1, tab2 = st.tabs(["Single Prediction", "Batch Prediction"])
-
-with tab1:
-    st.header("Single NCR Prediction")
-    with st.form("single_pred_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            category = st.selectbox("Category", ["Safety", "Quality", "Environment"])
-            status = st.selectbox("Status", ["Open", "Closed"])
-            nature_ncr = st.text_input("Nature of NCR", "Structural Defect")
-            
-        with col2:
-            package = st.text_input("Package", "MRT-01")
-            respond_period = st.number_input("Respond Period (days)", min_value=0, value=5)
-            ncr_aging = st.number_input("NCR Aging (days)", min_value=0, value=10)
-            
-        submitted = st.form_submit_button("Predict")
-        
-        if submitted:
-            # Mock prediction (replace with your actual model)
-            closure_duration = max(0, np.random.normal(30, 10))
-            recurrence_prob = np.random.uniform(0, 1)
-            
-            st.success("Prediction completed!")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Predicted Closure Duration", f"{closure_duration:.1f} days")
-            with col2:
-                st.metric("Recurrence Probability", f"{recurrence_prob*100:.1f}%")
-            
-            # Interpretation
-            if recurrence_prob > 0.7:
-                st.error("High recurrence risk - Immediate action recommended")
-            elif recurrence_prob > 0.4:
-                st.warning("Moderate recurrence risk - Monitor closely")
-            else:
-                st.success("Low recurrence risk")
-
-with tab2:
-    st.header("Batch Prediction")
-    uploaded_file = st.file_uploader("Upload NCR Data (Excel)", type=['xlsx'])
+# Feature engineering function
+def preprocess_input(input_df):
+    # Date calculations
+    input_df['NCR Closure Duration'] = (input_df['Closed Date'] - input_df['Date Issued']).dt.days
+    input_df['Reply_Delay'] = (input_df['Actual Reply Date'] - input_df['Expected Reply Date']).dt.days
     
-    if uploaded_file:
-        df = pd.read_excel(uploaded_file)
-        st.write("Preview of uploaded data:")
-        st.dataframe(df.head())
-        
-        if st.button("Predict for All NCRs"):
-            # Add your batch prediction logic here
-            progress_bar = st.progress(0)
+    # Categorical encoding (match training data columns)
+    categorical_cols = ['Category', 'Status', 'Nature of NCR', 'Package', 'Contractor']
+    input_df = pd.get_dummies(input_df, columns=categorical_cols)
+    
+    # Add missing columns present in training
+    expected_columns = [
+        'Category_Quality', 'Status_Closed', 'Nature of NCR_Workmanship', 
+        'Package_PKG2A', 'Contractor_APSB'
+    ]  # Add all your actual columns here
+    for col in expected_columns:
+        if col not in input_df.columns:
+            input_df[col] = 0
             
-            # Simulate processing
-            for i in range(100):
-                progress_bar.progress(i + 1)
-            
-            st.success("Batch prediction completed!")
-            st.download_button(
-                label="Download Predictions",
-                data=df.to_csv().encode('utf-8'),
-                file_name='ncr_predictions.csv',
-                mime='text/csv'
-            )
+    return input_df
 
-# Footer
-st.markdown("---")
-st.markdown("Developed by Mohd Fadhil Bin Mohd Naser & Mohd Taufik Bin Abd Wahid")
+# Streamlit UI
+st.title('NCR Prediction System')
+
+# Input form
+with st.form('ncr_form'):
+    category = st.selectbox('Category', ['Quality', 'Safety', 'Env', 'Risk', 'P&D'])
+    nature = st.text_input('Nature of NCR')
+    package = st.selectbox('Package', ['PKG2A', 'PKG3', 'PKG4', 'PKG5', 'PKG6'])
+    
+    date_issued = st.date_input('Date Issued')
+    expected_reply = st.date_input('Expected Reply Date')
+    actual_reply = st.date_input('Actual Reply Date')
+    
+    submit = st.form_submit_button('Predict')
+
+if submit:
+    # Create input DataFrame
+    input_data = pd.DataFrame([{
+        'Category': category,
+        'Nature of NCR': nature,
+        'Package': package,
+        'Date Issued': date_issued,
+        'Expected Reply Date': expected_reply,
+        'Actual Reply Date': actual_reply
+    }])
+    
+    # Preprocess input
+    processed_data = preprocess_input(input_data)
+    
+    # Predict
+    duration_pred = regressor.predict(processed_data)
+    recurrence_pred = classifier.predict(processed_data)
+    
+    # Display results
+    st.subheader('Predictions')
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Predicted Closure Days", f"{duration_pred[0]:.1f}")
+    with col2:
+        st.metric("Recurrence Risk", "High" if recurrence_pred[0] == 1 else "Low")
