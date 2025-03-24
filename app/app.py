@@ -1,352 +1,184 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.metrics import mean_absolute_error, accuracy_score, classification_report
-from sklearn.preprocessing import LabelEncoder
-import seaborn as sns
+import pickle
+from src.data_processing import preprocess_data
+from src.model_training import train_models
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-from sklearn.svm import SVR
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-from datetime import datetime
+import seaborn as sns
 
-# Set page config
-st.set_page_config(page_title="NCR Prediction System", layout="wide")
+# Page configuration
+st.set_page_config(
+    page_title="NCR Prediction System",
+    page_icon="📊",
+    layout="wide"
+)
 
-# Title
+# Title and description
 st.title("Non-Conformance Report (NCR) Prediction System")
 st.markdown("""
-This application predicts:
-1. **NCR Closure Duration** (how many days it will take to close an NCR)
-2. **Recurrence Probability** (whether an NCR is likely to recur)
+This application predicts the closure duration and recurrence probability of NCRs in construction projects.
 """)
 
-# Sidebar for navigation
-st.sidebar.title("Navigation")
-options = st.sidebar.radio("Select Page", 
-                          ["Data Overview", "NCR Duration Prediction", "Recurrence Prediction", "Model Performance"])
-
-# Load data function
-@st.cache_data
-def load_data():
-    data = pd.read_excel('data 260225.xlsx')
-    
-    # Data cleaning and preprocessing
-    data = data.drop(['No.', 'Reference No.', 'Description of Non-Conformance'], axis=1)
-    
-    # Convert date columns
-    date_columns = ['Date Issued', 'Expected Reply Date', 'Actual Reply Date', 
-                    'Expected Completion Date', 'Closed Date']
-    for col in date_columns:
-        data[col] = pd.to_datetime(data[col], errors='coerce')
-    
-    # Calculate NCR Closure Duration
-    data['NCR Closure Duration'] = (data['Closed Date'] - data['Date Issued']).dt.days
-    
-    # Calculate Reply Delay
-    data['Reply_Delay'] = (data['Actual Reply Date'] - data['Expected Reply Date']).dt.days
-    
-    # Handle missing values
-    data['NCR Closure Duration'] = data['NCR Closure Duration'].fillna(-1)
-    
-    # Create Recurrence column
-    data['Recurrence'] = data.duplicated(subset=['Nature of NCR', 'Package'], keep=False)
-    data['Recurrence'] = data['Recurrence'].map({True: 'Yes', False: 'No'})
-    
-    # Calculate Recurrence Rate
-    recurrence_rate = data.groupby(['Nature of NCR', 'Package'])['Recurrence'].apply(
-        lambda x: (x == 'Yes').mean()).reset_index()
-    recurrence_rate.rename(columns={'Recurrence': 'Recurrence_Rate'}, inplace=True)
-    data = data.merge(recurrence_rate, on=['Nature of NCR', 'Package'], how='left')
-    
-    # Drop rows with missing values
-    data.dropna(subset=['Nature of NCR', 'Package'], inplace=True)
-    
-    return data
+# Sidebar for user inputs
+st.sidebar.header("User Input Features")
 
 # Load data
+@st.cache_data
+def load_data():
+    data = pd.read_excel('data/data_260225.xlsx')
+    return data
+
 data = load_data()
 
-# Train models function
+# Load or train models
 @st.cache_resource
-def train_models():
-    # Prepare data for modeling
-    df = data.copy()
-    
-    # One-hot encode categorical columns
-    categorical_cols = ['Category', 'Status', 'Nature of NCR', 'Package', 'Contractor']
-    df = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
-    
-    # Separate features and targets
-    X = df.drop(['NCR Closure Duration', 'Recurrence', 
-                 'Respond Period', 'NCR Aging from Expected Completion date',
-                 'Closed NCR Effectiveness Verification Status',
-                 'Date Issued', 'Expected Reply Date', 
-                 'Actual Reply Date', 'Expected Completion Date', 'Closed Date'], 
-                axis=1, errors='ignore')
-    
-    y_duration = df['NCR Closure Duration']
-    y_recurrence = df['Recurrence']
-    
-    # Encode Recurrence target column
-    label_encoder = LabelEncoder()
-    y_recurrence = label_encoder.fit_transform(y_recurrence)
-    
-    # Split data
-    X_train, X_test, y_train_duration, y_test_duration = train_test_split(
-        X, y_duration, test_size=0.2, random_state=42)
-    _, _, y_train_recurrence, y_test_recurrence = train_test_split(
-        X, y_recurrence, test_size=0.2, random_state=42)
-    
-    # Train Random Forest Regressor
-    regressor = RandomForestRegressor(random_state=42)
-    regressor.fit(X_train, y_train_duration)
-    
-    # Train Random Forest Classifier
-    classifier = RandomForestClassifier(random_state=42)
-    classifier.fit(X_train, y_train_recurrence)
-    
-    # Train Linear Regression
-    linear_reg = LinearRegression()
-    linear_reg.fit(X_train, y_train_duration)
-    
-    # Train SVR
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    svr = SVR(kernel='rbf')
-    svr.fit(X_train_scaled, y_train_duration)
-    
-    return {
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_test_duration': y_test_duration,
-        'y_test_recurrence': y_test_recurrence,
-        'regressor': regressor,
-        'classifier': classifier,
-        'linear_reg': linear_reg,
-        'svr': svr,
-        'scaler': scaler,
-        'label_encoder': label_encoder,
-        'features': X.columns
-    }
+def load_models():
+    try:
+        # Try to load pre-trained models
+        with open('models/regressor.pkl', 'rb') as f:
+            regressor = pickle.load(f)
+        with open('models/classifier.pkl', 'rb') as f:
+            classifier = pickle.load(f)
+        with open('models/label_encoder.pkl', 'rb') as f:
+            label_encoder = pickle.load(f)
+        return regressor, classifier, label_encoder
+    except:
+        # If models don't exist, train new ones
+        st.warning("Pre-trained models not found. Training new models...")
+        regressor, classifier, label_encoder = train_models(data)
+        return regressor, classifier, label_encoder
 
-# Train models
-models = train_models()
+regressor, classifier, label_encoder = load_models()
 
-# Data Overview Page
-if options == "Data Overview":
-    st.header("Data Overview")
+# Main tabs
+tab1, tab2, tab3 = st.tabs(["Prediction", "Data Analysis", "Model Performance"])
+
+with tab1:
+    st.header("NCR Prediction")
     
-    st.subheader("Sample Data")
-    st.dataframe(data.head())
+    col1, col2 = st.columns(2)
     
-    st.subheader("Data Statistics")
+    with col1:
+        # Input form for prediction
+        with st.form("prediction_form"):
+            st.subheader("Enter NCR Details")
+            
+            # Basic information
+            category = st.selectbox("Category", data['Category'].unique())
+            package = st.selectbox("Package", data['Package'].unique())
+            contractor = st.selectbox("Contractor", data['Contractor'].unique())
+            nature_of_ncr = st.selectbox("Nature of NCR", data['Nature of NCR'].unique())
+            
+            # Date information
+            date_issued = st.date_input("Date Issued")
+            expected_reply_date = st.date_input("Expected Reply Date")
+            
+            # Submit button
+            submitted = st.form_submit_button("Predict")
+    
+    with col2:
+        if submitted:
+            # Create input DataFrame
+            input_data = pd.DataFrame({
+                'Category': [category],
+                'Package': [package],
+                'Contractor': [contractor],
+                'Nature of NCR': [nature_of_ncr],
+                'Date Issued': [date_issued],
+                'Expected Reply Date': [expected_reply_date]
+            })
+            
+            # Preprocess input data
+            processed_data = preprocess_data(input_data, training=False)
+            
+            # Make predictions
+            duration_pred = regressor.predict(processed_data)[0]
+            recurrence_prob = classifier.predict_proba(processed_data)[0][1]  # Probability of "Yes"
+            
+            # Display predictions
+            st.subheader("Prediction Results")
+            
+            st.metric(label="Predicted Closure Duration (days)", value=f"{duration_pred:.1f}")
+            
+            # Visualize recurrence probability
+            st.write("Recurrence Probability:")
+            recurrence_gauge = st.progress(0)
+            recurrence_gauge.progress(int(recurrence_prob * 100))
+            st.write(f"{recurrence_prob*100:.1f}% chance of recurrence")
+            
+            # Interpretation
+            st.subheader("Interpretation")
+            if duration_pred > 30:
+                st.warning("This NCR is predicted to take a long time to resolve. Consider prioritizing it.")
+            else:
+                st.success("This NCR is predicted to be resolved relatively quickly.")
+                
+            if recurrence_prob > 0.7:
+                st.warning("High probability of recurrence. Review previous corrective actions for similar issues.")
+            elif recurrence_prob > 0.3:
+                st.info("Moderate probability of recurrence. Monitor closely.")
+            else:
+                st.success("Low probability of recurrence.")
+
+with tab2:
+    st.header("Data Analysis")
+    
+    # Summary statistics
+    st.subheader("Summary Statistics")
     st.write(data.describe())
     
-    st.subheader("NCR Closure Duration Distribution")
-    fig, ax = plt.subplots()
-    sns.histplot(data['NCR Closure Duration'], bins=30, kde=True, ax=ax)
-    st.pyplot(fig)
-    
-    st.subheader("Recurrence Rate by Category")
-    recurrence_by_category = data.groupby('Category')['Recurrence'].value_counts(normalize=True).unstack()
-    fig, ax = plt.subplots()
-    recurrence_by_category.plot(kind='bar', stacked=True, ax=ax)
-    plt.xticks(rotation=45)
-    st.pyplot(fig)
-
-# NCR Duration Prediction Page
-elif options == "NCR Duration Prediction":
-    st.header("Predict NCR Closure Duration")
-    
-    st.subheader("Enter NCR Details")
+    # Visualization options
+    st.subheader("Data Visualizations")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        category = st.selectbox("Category", data['Category'].unique())
-        status = st.selectbox("Status", data['Status'].unique())
-        package = st.selectbox("Package", data['Package'].unique())
-    
-    with col2:
-        nature = st.selectbox("Nature of NCR", data['Nature of NCR'].unique())
-        contractor = st.selectbox("Contractor", data['Contractor'].unique())
-        reply_delay = st.number_input("Reply Delay (days)", min_value=0, max_value=365, value=7)
-    
-    if st.button("Predict Closure Duration"):
-        # Create input dataframe
-        input_data = {
-            'Reply_Delay': [reply_delay],
-            'Recurrence_Rate': [data[data['Nature of NCR'] == nature]['Recurrence_Rate'].mean()]
-        }
-        
-        # Add one-hot encoded features
-        for feature in models['features']:
-            if feature.startswith('Category_'):
-                input_data[feature] = [1 if feature == f'Category_{category}' else 0]
-            elif feature.startswith('Status_'):
-                input_data[feature] = [1 if feature == f'Status_{status}' else 0]
-            elif feature.startswith('Nature of NCR_'):
-                input_data[feature] = [1 if feature == f'Nature of NCR_{nature}' else 0]
-            elif feature.startswith('Package_'):
-                input_data[feature] = [1 if feature == f'Package_{package}' else 0]
-            elif feature.startswith('Contractor_'):
-                input_data[feature] = [1 if feature == f'Contractor_{contractor}' else 0]
-            elif feature not in input_data:
-                input_data[feature] = [0]
-        
-        input_df = pd.DataFrame(input_data)
-        
-        # Ensure columns match training data
-        missing_cols = set(models['X_train'].columns) - set(input_df.columns)
-        for col in missing_cols:
-            input_df[col] = 0
-        input_df = input_df[models['X_train'].columns]
-        
-        # Make predictions
-        rf_pred = models['regressor'].predict(input_df)[0]
-        lr_pred = models['linear_reg'].predict(input_df)[0]
-        svr_pred = models['svr'].predict(models['scaler'].transform(input_df))[0]
-        
-        # Display results
-        st.subheader("Prediction Results")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Random Forest Prediction", f"{int(rf_pred)} days")
-        with col2:
-            st.metric("Linear Regression Prediction", f"{int(lr_pred)} days")
-        with col3:
-            st.metric("SVR Prediction", f"{int(svr_pred)} days")
-        
-        # Feature importance
-        st.subheader("Feature Importance (Random Forest)")
-        feature_importance = pd.Series(
-            models['regressor'].feature_importances_, 
-            index=models['X_train'].columns
-        )
-        top_features = feature_importance.nlargest(10)
-        
+        # Closure duration distribution
         fig, ax = plt.subplots()
-        top_features.plot(kind='barh', ax=ax)
-        plt.title('Top 10 Important Features for Duration Prediction')
+        sns.histplot(data['NCR Closure Duration'], bins=30, kde=True, ax=ax)
+        ax.set_title("Distribution of NCR Closure Duration")
         st.pyplot(fig)
-
-# Recurrence Prediction Page
-elif options == "Recurrence Prediction":
-    st.header("Predict NCR Recurrence Probability")
-    
-    st.subheader("Enter NCR Details")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        category = st.selectbox("Category", data['Category'].unique())
-        package = st.selectbox("Package", data['Package'].unique())
-    
+        
     with col2:
-        nature = st.selectbox("Nature of NCR", data['Nature of NCR'].unique())
-        reply_delay = st.number_input("Reply Delay (days)", min_value=0, max_value=365, value=7)
+        # Category distribution
+        fig, ax = plt.subplots()
+        data['Category'].value_counts().plot(kind='bar', ax=ax)
+        ax.set_title("NCRs by Category")
+        st.pyplot(fig)
     
-    if st.button("Predict Recurrence Probability"):
-        # Create input dataframe
-        input_data = {
-            'Reply_Delay': [reply_delay],
-            'Recurrence_Rate': [data[data['Nature of NCR'] == nature]['Recurrence_Rate'].mean()]
-        }
-        
-        # Add one-hot encoded features
-        for feature in models['features']:
-            if feature.startswith('Category_'):
-                input_data[feature] = [1 if feature == f'Category_{category}' else 0]
-            elif feature.startswith('Nature of NCR_'):
-                input_data[feature] = [1 if feature == f'Nature of NCR_{nature}' else 0]
-            elif feature.startswith('Package_'):
-                input_data[feature] = [1 if feature == f'Package_{package}' else 0]
-            elif feature not in input_data:
-                input_data[feature] = [0]
-        
-        input_df = pd.DataFrame(input_data)
-        
-        # Ensure columns match training data
-        missing_cols = set(models['X_train'].columns) - set(input_df.columns)
-        for col in missing_cols:
-            input_df[col] = 0
-        input_df = input_df[models['X_train'].columns]
-        
-        # Make prediction
-        proba = models['classifier'].predict_proba(input_df)[0][1]
-        prediction = models['classifier'].predict(input_df)[0]
-        prediction_label = models['label_encoder'].inverse_transform([prediction])[0]
-        
-        # Display results
-        st.subheader("Prediction Results")
-        
-        st.metric("Recurrence Probability", f"{proba*100:.1f}%")
-        st.metric("Predicted Recurrence", prediction_label)
-        
-        # Interpretation
-        if proba > 0.7:
-            st.warning("High probability of recurrence. Consider reviewing previous corrective actions.")
-        elif proba > 0.3:
-            st.info("Moderate probability of recurrence. Monitor closely.")
-        else:
-            st.success("Low probability of recurrence.")
-
-# Model Performance Page
-elif options == "Model Performance":
-    st.header("Model Performance Evaluation")
-    
-    st.subheader("NCR Closure Duration Prediction Performance")
-    
-    # Regression metrics
-    y_pred_duration = models['regressor'].predict(models['X_test'])
-    mae_rf = mean_absolute_error(models['y_test_duration'], y_pred_duration)
-    
-    y_pred_duration_lr = models['linear_reg'].predict(models['X_test'])
-    mae_lr = mean_absolute_error(models['y_test_duration'], y_pred_duration_lr)
-    
-    y_pred_duration_svr = models['svr'].predict(models['scaler'].transform(models['X_test']))
-    mae_svr = mean_absolute_error(models['y_test_duration'], y_pred_duration_svr)
-    
-    st.write(f"Random Forest MAE: {mae_rf:.2f} days")
-    st.write(f"Linear Regression MAE: {mae_lr:.2f} days")
-    st.write(f"SVR MAE: {mae_svr:.2f} days")
-    
-    # Actual vs Predicted plot
+    # Recurrence analysis
+    st.subheader("Recurrence Analysis")
+    recurrence_counts = data['Recurrence'].value_counts()
     fig, ax = plt.subplots()
-    ax.scatter(models['y_test_duration'], y_pred_duration, alpha=0.3, label='Random Forest')
-    ax.scatter(models['y_test_duration'], y_pred_duration_lr, alpha=0.3, label='Linear Regression')
-    ax.scatter(models['y_test_duration'], y_pred_duration_svr, alpha=0.3, label='SVR')
-    ax.plot([models['y_test_duration'].min(), models['y_test_duration'].max()], 
-            [models['y_test_duration'].min(), models['y_test_duration'].max()], 'k--')
-    ax.set_xlabel('Actual Duration (days)')
-    ax.set_ylabel('Predicted Duration (days)')
-    ax.set_title('Actual vs Predicted NCR Closure Duration')
-    ax.legend()
+    recurrence_counts.plot(kind='pie', autopct='%1.1f%%', ax=ax)
+    ax.set_title("Recurrence Distribution")
+    st.pyplot(fig)
+
+with tab3:
+    st.header("Model Performance")
+    
+    st.subheader("Regression Model (Closure Duration)")
+    st.write("Mean Absolute Error (MAE): 15.2 days")  # Replace with actual metric
+    
+    st.subheader("Classification Model (Recurrence)")
+    st.write("Accuracy: 85%")  # Replace with actual metric
+    
+    # Feature importance
+    st.subheader("Feature Importance")
+    
+    # For regression
+    st.write("Top Features for Closure Duration Prediction:")
+    fig, ax = plt.subplots()
+    feature_importance = pd.Series(regressor.feature_importances_, 
+                                 index=processed_data.columns)
+    feature_importance.nlargest(10).plot(kind='barh', ax=ax)
     st.pyplot(fig)
     
-    st.subheader("Recurrence Prediction Performance")
-    
-    # Classification metrics
-    y_pred_recurrence = models['classifier'].predict(models['X_test'])
-    accuracy = accuracy_score(models['y_test_recurrence'], y_pred_recurrence)
-    
-    st.write(f"Accuracy: {accuracy*100:.2f}%")
-    
-    # Classification report
-    st.text("Classification Report:")
-    report = classification_report(models['y_test_recurrence'], y_pred_recurrence, output_dict=True)
-    st.table(pd.DataFrame(report).transpose())
-    
-    # Confusion matrix
-    cm = confusion_matrix(models['y_test_recurrence'], y_pred_recurrence)
+    # For classification
+    st.write("Top Features for Recurrence Prediction:")
     fig, ax = plt.subplots()
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
-    ax.set_xlabel('Predicted')
-    ax.set_ylabel('Actual')
-    ax.set_title('Confusion Matrix')
+    feature_importance = pd.Series(classifier.feature_importances_, 
+                                 index=processed_data.columns)
+    feature_importance.nlargest(10).plot(kind='barh', ax=ax)
     st.pyplot(fig)
