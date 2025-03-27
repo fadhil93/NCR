@@ -5,9 +5,9 @@ from datetime import datetime
 
 # Load models and encoder
 try:
-    duration_pipe = joblib.load('model/duration_model.pkl')
-    recurrence_pipe = joblib.load('model/recurrence_model.pkl')
-    encoder = joblib.load('model/encoder.pkl')  # Ensure encoder.pkl is available
+    duration_pipe = joblib.load('duration_model.pkl')
+    recurrence_pipe = joblib.load('recurrence_model.pkl')
+    encoder = joblib.load('encoder.pkl')  # Ensure encoder.pkl is available
 except FileNotFoundError as e:
     st.error(f"Missing model file: {e.filename}. Ensure all model files exist in the directory.")
     st.stop()
